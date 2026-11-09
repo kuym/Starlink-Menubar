@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>local.starlink-menubar</string>
+	<key>CFBundleName</key><string>Starlink Menu Bar</string>
+	<key>CFBundleExecutable</key><string>StarlinkMenuBar</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>0.1.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>LSMinimumSystemVersion</key><string>14.0</string>
+	<!-- Menu bar only: no Dock icon, no app menu -->
+	<key>LSUIElement</key><true/>
+	<!-- macOS 15+ requires this to reach 192.168.100.1; user is prompted once -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reads status from your Starlink dish on the local network (192.168.100.1).</string>
+	<!-- The dish API is plain HTTP on the LAN -->
+	<key>NSAppTransportSecurity</key>
+	<dict><key>NSAllowsLocalNetworking</key><true/></dict>
+</dict>
+</plist>
