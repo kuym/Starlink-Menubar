@@ -9,8 +9,10 @@ struct PopupView: View {
     @State private var contentSize: CGSize = .zero
 
     static let width: CGFloat = 400
-    static let skyHeight: CGFloat = 390
-    static let cornerRadius: CGFloat = 14
+    static let skyHeight: CGFloat = 435
+    /// Corner radius before the window's own is known; replaced by the window's radius once shown.
+    static let cornerRadius: CGFloat = 6
+    @State private var cornerRadius = PopupView.cornerRadius
 
     var body: some View {
         Group {
@@ -33,12 +35,12 @@ struct PopupView: View {
         }
         .background(Color(nsColor: SkyScene.background))
         .environment(\.colorScheme, .dark)
-        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .circular))   // as the window mask
         .fixedSize(horizontal: false, vertical: true)
         // MenuBarExtra grows its window for taller content but doesn't shrink it again, which left a large
         // empty region when the dish disappeared. Size the window to the content explicitly.
         .onGeometryChange(for: CGSize.self) { $0.size } action: { contentSize = $0 }
-        .background(WindowSizer(contentSize: contentSize, cornerRadius: Self.cornerRadius))
+        .background(WindowSizer(contentSize: contentSize) { r in if r != cornerRadius { cornerRadius = r } })
         // MenuBarExtra keeps this view alive while the popup is closed, and onAppear/onDisappear don't
         // reliably track it, so watch the hosting window's visibility instead.
         .background(WindowVisibilityReader { monitor.isPopupOpen = $0 })
@@ -180,15 +182,6 @@ struct LatencyGraph: View {
         }
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.07)))
         .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay(alignment: .topLeading) {
-            Text("latency · last \(minutes)m")
-                .font(.system(size: 8)).foregroundStyle(.white.opacity(0.3)).padding(.horizontal, 4).padding(.vertical, 2)
-        }
-    }
-
-    private var minutes: Int {
-        guard let f = samples.first?.date, let l = samples.last?.date else { return 0 }
-        return max(1, Int((l.timeIntervalSince(f) / 60).rounded()))
     }
 }
 
@@ -268,20 +261,21 @@ enum Fmt {
 }
 
 /// Resizes the hosting window to exactly fit `contentSize`, keeping its top edge (under the menu bar) fixed.
-/// Also makes the window itself invisible apart from the content: the system panel material behind it is
-/// masked to the content's rounded shape, so no grey shows at the edges or corners.
+/// Also hides the system panel backdrop (so no grey can show around the content) and reports the window's
+/// own corner radius, so the content can be clipped to exactly the window's shape.
 private struct WindowSizer: NSViewRepresentable {
     let contentSize: CGSize
-    let cornerRadius: CGFloat
+    let onCornerRadius: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ v: NSView, context: Context) {
         let size = contentSize
-        guard size.width > 0, size.height > 0 else { return }
-        DispatchQueue.main.async {                       // not during SwiftUI's layout pass
+        DispatchQueue.main.async { [onCornerRadius] in   // not during SwiftUI's layout pass
             guard let w = v.window else { return }
-            Self.matchChrome(of: w, cornerRadius: cornerRadius)
+            Self.hideBackdrop(of: w)
+            if let r = Self.cornerRadius(of: w) { onCornerRadius(r) }
+            guard size.width > 0, size.height > 0 else { return }
             let current = w.contentRect(forFrameRect: w.frame).size
             guard abs(current.height - size.height) > 0.5 || abs(current.width - size.width) > 0.5 else { return }
             var f = w.frameRect(forContentRect: NSRect(origin: .zero, size: size))
@@ -291,23 +285,28 @@ private struct WindowSizer: NSViewRepresentable {
         }
     }
 
-    private static func matchChrome(of w: NSWindow, cornerRadius r: CGFloat) {
-        guard w.backgroundColor != .clear else { return }      // once per window
-        w.isOpaque = false
-        w.backgroundColor = .clear
-        let mask = NSImage(size: NSSize(width: 2 * r + 1, height: 2 * r + 1), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).fill()
-            return true
+    /// MenuBarExtra draws its material with backdrop layers in the hosting view; the content covers the
+    /// whole window, so hide them rather than let them show at the anti-aliased corners.
+    private static func hideBackdrop(of w: NSWindow) {
+        guard let host = w.contentView?.layer else { return }
+        var changed = false
+        for l in host.sublayers ?? [] {
+            let name = String(describing: type(of: l))
+            if (name.contains("Backdrop") || name.contains("Chameleon")) && !l.isHidden {
+                l.isHidden = true
+                changed = true
+            }
         }
-        mask.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
-        mask.resizingMode = .stretch
-        func visit(_ view: NSView) {
-            if let e = view as? NSVisualEffectView { e.maskImage = mask }
-            view.subviews.forEach(visit)
-        }
-        if let root = w.contentView?.superview ?? w.contentView { visit(root) }
-        w.invalidateShadow()
+        if changed { w.invalidateShadow() }
+    }
+
+    /// The window server clips the panel with this resizable corner mask (radius 6 on macOS 26). Private,
+    /// so it's looked up defensively; without it the content keeps its default radius.
+    private static func cornerRadius(of w: NSWindow) -> CGFloat? {
+        let sel = Selector(("_cornerMask"))
+        guard w.responds(to: sel), let mask = w.perform(sel)?.takeUnretainedValue() as? NSImage else { return nil }
+        let r = mask.capInsets.top
+        return r > 0 && r < 40 ? r : nil
     }
 }
 

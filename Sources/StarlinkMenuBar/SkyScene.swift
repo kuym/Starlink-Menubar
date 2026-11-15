@@ -11,10 +11,18 @@ import simd
 final class SkyScene {
     let scene = SCNScene()
     let cameraNode = SCNNode()
-    let cameraTarget = SIMD3<Float>(0, -0.17, 0)
+    /// The orbit's centre of rotation: halfway up from the ground to the top of the (unit) dome.
+    var cameraTarget: SIMD3<Float> { Self.orbitCenter }
+    /// The orbit's centre of rotation, 0.19 above the ground. Together with `lensShiftY`, it keeps the dome
+    /// and compass rose centred in the space above the latency graph (equal margins to the window top and
+    /// the graph) both looking straight down and at the 30° auto-orbit, with only gentle drift in between.
+    nonisolated static let orbitCenter = SIMD3<Float>(0, groundY + 0.19, 0)
+    /// A constant shift-lens offset (normalised device units, 2 = full height) that moves the pivot's image
+    /// from the window's centre up to the centre of the space above the bottom HUD: 70 of 435 pt.
+    nonisolated static let lensShiftY: Float = 70.0 / 435.0
 
     // Layout
-    static let groundY: Float = -0.12
+    nonisolated static let groundY: Float = -0.12
     static let terminalCenter = SIMD3<Float>(0, 0.24, 0)
     static let terminalWidth: Float = 0.30
     static let terminalLength: Float = terminalWidth * 1.618
@@ -196,7 +204,24 @@ final class SkyScene {
     }
 
     /// Places the camera on an orbit around the scene (used for snapshots; the user orbits by dragging).
-    func orbit(azimuthDeg: Float, elevationDeg: Float, distance: Float = 4.5) {
+    /// Re-applies the camera's projection with `lensShiftY`, tracking its current field of view (scroll/
+    /// pinch zoom changes it) and the viewport's aspect. Called before every rendered frame.
+    nonisolated static func applyLensShift(to node: SCNNode, viewport: CGSize) {
+        guard let cam = node.camera, viewport.width > 0, viewport.height > 0 else { return }
+        // A scratch camera with the same lens computes the unshifted projection (the live camera's own
+        // projection is overridden by this, so it can't be asked).
+        let lens = SCNCamera()
+        lens.projectionDirection = cam.projectionDirection
+        lens.fieldOfView = cam.fieldOfView
+        lens.zNear = cam.zNear
+        lens.zFar = cam.zFar
+        let p = simd_float4x4(lens.projectionTransform(withViewportSize: viewport))
+        var shift = matrix_identity_float4x4
+        shift.columns.3.y = lensShiftY                       // clip y += shift · w  →  NDC y += shift
+        cam.projectionTransform = SCNMatrix4(shift * p)
+    }
+
+    func orbit(azimuthDeg: Float, elevationDeg: Float, distance: Float = 4.4) {
         let d = Self.direction(azDeg: azimuthDeg, elDeg: elevationDeg)
         cameraNode.simdPosition = cameraTarget + d * distance
         cameraNode.simdLook(at: cameraTarget, up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
@@ -546,7 +571,9 @@ final class SkyScene {
         scene.rootNode.addChildNode(fillNode)
 
         let cam = SCNCamera()
-        cam.fieldOfView = 36
+        // Horizontal FOV: the scene keeps its scale whatever the popup's height (the window is a fixed width).
+        cam.projectionDirection = .horizontal
+        cam.fieldOfView = 36.85
         cam.zNear = 0.05
         cam.zFar = 50
         cam.wantsHDR = true
@@ -918,6 +945,7 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let cam = renderer.pointOfView else { return }
+        SkyScene.applyLensShift(to: cam, viewport: renderer.currentViewport.size)
         if case .idle = mode { return }
         let dt = Float(min(1.0 / 20, time - (lastTime ?? time)))   // cap hitches so they don't jump
         lastTime = time

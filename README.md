@@ -1,6 +1,20 @@
-# Starlink Menu Bar
+# Starlink-Menubar
 
-A macOS menu bar app that watches the Starlink dish your Mac is connected through.
+![The popup: a 3D sky view of the dish's obstruction map, with a latency graph and link stats below](https://github.com/kuym/Starlink-menubar/raw/main/docs/screenshot-1.png "Screenshot")
+
+Starlink Menu Bar is a small native macOS app for checking your Starlink connection at a glance. When your Mac
+is online through a Starlink dish, the menu bar shows its signal strength and flags obstructions,
+misalignment and faults. Click the icon to open a 3D view of the sky, like the one in the Starlink app:
+
+* the dish's obstruction map, drawn on a dome;
+* the dish's current pointing and its ideal orientation, so you can align it by hand;
+* a live latency and packet-loss graph;
+* the current upload and download rates.
+
+The app talks directly to the dish on your local network. It needs no account, no cloud service and no
+third-party dependencies.
+
+## Features
 
 * **Menu bar icon**: a phone-style 4-bar signal indicator. It is replaced by an orange tree when the dish is **obstructed**, a yellow crosshair when it is **misaligned**, and red icons for thermal or hardware faults and disabled service. A crossed-out antenna means no Starlink dish was found.
 * **Popup**: the whole window is the 3D sky view (below), with a heads-up display over it:
@@ -16,7 +30,9 @@ A macOS menu bar app that watches the Starlink dish your Mac is connected throug
   `az° ∡el°`. The obstruction map is projected as dots onto a hemisphere (white = clear,
   red = obstructed, grey = no data). A floating outline marks the ideal orientation. It glows white when the
   dish is within 5° of optimal on both azimuth and elevation, and red otherwise. Dots more than 67.5° off the
-  boresight are hidden (below 22.5° elevation above the antenna face, outside its field of view). Drag to orbit,
+  boresight are hidden (below 22.5° elevation above the antenna face, outside its field of view). Drag to orbit (around a point 0.19 above the ground; with a
+  fixed shift-lens offset this keeps the dome centred above the latency graph both from overhead and at the
+  30° orbit),
   scroll to zoom. A released drag coasts and slows smoothly to rest (custom inertia: SceneKit's own stops
   abruptly). When the popup opens, and once the camera has been still for 1 s after a gesture, the camera eases to 30° elevation and slowly circles the vertical axis. It starts from rest
   with zero velocity and acceleration, reaching 5°/s over 3.5 s. It renders continuously only while it moves.
