@@ -1,9 +1,12 @@
+import Orbits
 import SwiftUI
 
 /// The popup: the whole window is the 3D sky view, with a heads-up display over it. Without a dish it
 /// shrinks to a short "not connected" panel.
 struct PopupView: View {
     @Bindable var monitor: DishMonitor
+    var catalog = SatelliteCatalog.shared
+    var location = ObserverLocation.shared
     /// Outlives the popup's open/close cycles so the scene isn't rebuilt and the orbit angle is kept.
     @State private var sky = SkyScene()
     @State private var contentSize: CGSize = .zero
@@ -21,11 +24,13 @@ struct PopupView: View {
                     // The SCNView only exists while the popup is on screen: that stops its display link and
                     // all GPU work when hidden, rather than relying on SceneKit to go quiet by itself.
                     if monitor.isPopupOpen {
-                        SkySceneView(sky: sky, status: s, map: monitor.obstructionMap, onRefresh: refresh)
+                        SkySceneView(sky: sky, status: s, map: monitor.obstructionMap,
+                                     constellation: catalog.constellation, observer: location.observer,
+                                     onRefresh: refresh)
                     } else {
                         Color(nsColor: SkyScene.background)
                     }
-                    SkyHUD(status: s, history: monitor.history)
+                    SkyHUD(status: s, history: monitor.history, location: location)
                 }
                 .frame(width: Self.width, height: Self.skyHeight)
             } else {
@@ -64,6 +69,7 @@ struct PopupView: View {
 struct SkyHUD: View {
     let status: DishStatus
     let history: [DishMonitor.Sample]
+    var location = ObserverLocation.shared
 
     static let textSize: CGFloat = 13
 
@@ -75,14 +81,17 @@ struct SkyHUD: View {
                     .foregroundStyle(.white)
                     .help("Signal: \(Assessment.bars(status)) of 4 bars")
                 Spacer()
-                Link(destination: URL(string: "http://192.168.100.1")!) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "link").foregroundStyle(Color(red: 0.45, green: 0.72, blue: 1))
-                        Text("Web").foregroundStyle(.white)
+                VStack(alignment: .trailing, spacing: 6) {
+                    Link(destination: URL(string: "http://192.168.100.1")!) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "link").foregroundStyle(Self.accent)
+                            Text("Web").foregroundStyle(.white)
+                        }
+                        .font(.system(size: Self.textSize))
                     }
-                    .font(.system(size: Self.textSize))
+                    .help("Open the dish's web UI (192.168.100.1)")
+                    LocationButton(location: location)
                 }
-                .help("Open the dish's web UI (192.168.100.1)")
             }
             Spacer(minLength: 0)
             VStack(spacing: 6) {
@@ -101,6 +110,8 @@ struct SkyHUD: View {
         }
         .padding(14)
     }
+
+    static let accent = Color(red: 0.45, green: 0.72, blue: 1)
 
     /// "23ms  MAX 80  AVG 42": current, max and median over the graph's window ("-ms" while the link is down).
     private var latencyText: some View {
@@ -127,6 +138,52 @@ struct SkyHUD: View {
         case 1e6...: String(format: "%3.1fmbps", bps / 1e6)
         default: String(format: "%3.1fkbps", bps / 1e3)
         }
+    }
+}
+
+/// The observer position used for the satellite beams, as a small button: Cupertino until clicked, then
+/// wherever macOS Location Services says the Mac is (asking permission the first time).
+struct LocationButton: View {
+    let location: ObserverLocation
+
+    var body: some View {
+        Button { location.requestSystemLocation() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon).foregroundStyle(location.state == .denied ? .orange : SkyHUD.accent)
+                Text(Self.coordinates(location.latitude, location.longitude))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11))
+            .opacity(location.state == .locating ? 0.5 : 1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(location.state == .locating)
+        .help(help)
+    }
+
+    private var icon: String {
+        switch location.state {
+        case .denied: "location.slash"
+        case .failed: "location"
+        case .idle, .locating: location.isFromSystem ? "location.fill" : "location"
+        }
+    }
+
+    private var help: String {
+        switch location.state {
+        case .denied: "Location access is off for Starlink Menu Bar (System Settings › Privacy & Security › Location Services)"
+        case .failed: "Couldn't get the location; click to try again"
+        case .locating: "Locating…"
+        case .idle: location.isFromSystem
+            ? "Satellites are shown for this location (from Location Services); click to update it"
+            : "Satellites are shown for Cupertino, CA; click to use this Mac's location"
+        }
+    }
+
+    static func coordinates(_ lat: Double, _ lon: Double) -> String {
+        String(format: "%.2f°%@ %.2f°%@", abs(lat), lat >= 0 ? "N" : "S", abs(lon), lon >= 0 ? "E" : "W")
     }
 }
 

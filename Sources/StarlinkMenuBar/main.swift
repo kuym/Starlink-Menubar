@@ -1,5 +1,6 @@
 import AppKit
 import Metal
+import Orbits
 import SceneKit
 import SwiftUI
 
@@ -9,6 +10,7 @@ struct StarlinkMenuBarApp: App {
     init() {
         // Menu-bar-only app, even when run straight from `swift run` without an Info.plist.
         NSApplication.shared.setActivationPolicy(.accessory)
+        SatelliteCatalog.shared.start()      // weekly TLE fetch, daily orbit fit
     }
 
     var body: some Scene {
@@ -67,12 +69,20 @@ if CommandLine.arguments.contains("--dump") {
         // The 3D sky view is an SCNView, which ImageRenderer can't capture; render it offscreen instead.
         let sky = SkyScene()
         sky.update(status: monitor.status, map: monitor.obstructionMap, animated: false)
+        // Satellite beams, from the cached TLEs (run the app once to download them).
+        let constellation = SatelliteCatalog.loadCached()
+        sky.beams.setConstellation(constellation)
+        sky.beams.setObserver(ObserverLocation.shared.observer)
+        print("satellites:", constellation.map { "\($0.count) in the cached catalogue" } ?? "no cached TLEs at \(SatelliteCatalog.cacheURL.path)")
         let scnView = SCNView(frame: CGRect(x: 0, y: 0, width: PopupView.width * 2, height: PopupView.skyHeight * 2),
                               options: [SCNView.Option.preferredRenderingAPI.rawValue: SCNRenderingAPI.metal.rawValue])
         scnView.scene = sky.scene
         scnView.pointOfView = sky.cameraNode
         scnView.antialiasingMode = .multisampling4X
-        let first = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); return scnView.snapshot() }()                         // the view as it first appears
+        let first = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }()                         // the view as it first appears
+        for v in sky.beams.lastVisible {
+            print(String(format: "  in view: %6d  el %5.1f°  %6.0f km%@", v.satnum, v.elevationDeg, v.rangeKm, v.closest ? "  ← closest" : ""))
+        }
         if let tiff = first.tiffRepresentation,
            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
             try? png.write(to: dir.appendingPathComponent("sky-initial.png"))
@@ -96,7 +106,7 @@ if CommandLine.arguments.contains("--dump") {
         let views: [(String, Float, Float)] = [("south", 200, 34), ("west", 290, 30), ("north", 20, 30), ("top", 180, 88)]
         for (name, az, el) in views {
             sky.orbit(azimuthDeg: az, elevationDeg: el)
-            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); return scnView.snapshot() }()
+            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }()
             if let tiff = img.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: dir.appendingPathComponent("sky-\(name).png"))
@@ -108,7 +118,7 @@ if CommandLine.arguments.contains("--dump") {
             aligned.alignment.desiredElevationDeg = aligned.alignment.elevationDeg - 2
             sky.update(status: aligned, map: monitor.obstructionMap, animated: false)
             sky.orbit(azimuthDeg: 200, elevationDeg: 34)
-            if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); return scnView.snapshot() }().tiffRepresentation,
+            if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }().tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: dir.appendingPathComponent("sky-aligned.png"))
             }
@@ -119,7 +129,7 @@ if CommandLine.arguments.contains("--dump") {
             sky.update(status: off, map: monitor.obstructionMap, animated: false)
             if let az = sky.alignmentFocusAzimuthDeg {
                 sky.orbit(azimuthDeg: az, elevationDeg: AutoOrbit.elevationDeg)
-                if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); return scnView.snapshot() }().tiffRepresentation,
+                if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }().tiffRepresentation,
                    let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                     try? png.write(to: dir.appendingPathComponent("sky-alignment-mode.png"))
                 }

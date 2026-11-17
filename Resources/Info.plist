@@ -14,6 +14,11 @@
 	<!-- macOS 15+ requires this to reach 192.168.100.1; user is prompted once -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Reads status from your Starlink dish on the local network (192.168.100.1).</string>
+	<!-- Optional: the location button in the popup, for which satellites are overhead -->
+	<key>NSLocationUsageDescription</key>
+	<string>Shows which Starlink satellites are overhead from where you are.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Shows which Starlink satellites are overhead from where you are.</string>
 	<!-- The dish API is plain HTTP on the LAN -->
 	<key>NSAppTransportSecurity</key>
 	<dict><key>NSAllowsLocalNetworking</key><true/></dict>

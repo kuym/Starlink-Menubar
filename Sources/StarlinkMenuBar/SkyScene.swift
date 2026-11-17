@@ -1,5 +1,6 @@
 import AppKit
 import SceneKit
+import Orbits
 import SwiftUI
 import simd
 
@@ -23,10 +24,10 @@ final class SkyScene {
 
     // Layout
     nonisolated static let groundY: Float = -0.12
-    static let terminalCenter = SIMD3<Float>(0, 0.24, 0)
-    static let terminalWidth: Float = 0.30
+    nonisolated static let terminalCenter = SIMD3<Float>(0, 0.24, 0)
+    nonisolated static let terminalWidth: Float = 0.30
     static let terminalLength: Float = terminalWidth * 1.618
-    static let terminalThickness: Float = terminalWidth * 0.10
+    nonisolated static let terminalThickness: Float = terminalWidth * 0.10
     static let outlineScale: Float = 1.22
     static let alignedToleranceDeg = 5.0
     /// Beyond this error on either axis the view switches to "alignment mode": dimmed dots, and the camera
@@ -35,7 +36,7 @@ final class SkyScene {
     static let alignmentModeHysteresisDeg = 0.5
     static let alignmentModeDotOpacity: CGFloat = 0.33
     /// The phased array can't see below this elevation above its own face plane: dots there are hidden.
-    static let fieldOfViewMinElevationDeg: Float = 22.5
+    nonisolated static let fieldOfViewMinElevationDeg: Float = 22.5
 
     // Palette
     static let background = NSColor(white: 0.045, alpha: 1)
@@ -63,7 +64,9 @@ final class SkyScene {
 
     /// Camera motion state. Lives here, not in the view, so it survives the popup closing: the SCNView is
     /// torn down while hidden, and a quick reopen carries on with the same angle and angular velocity.
-    private(set) lazy var autoOrbit = AutoOrbit(target: cameraTarget)
+    private(set) lazy var autoOrbit = AutoOrbit(target: cameraTarget, beams: beams)
+    /// Beams to the satellites in the dish's field of view (animated from the render loop).
+    let beams = SatelliteBeams()
     /// When the sky view was last torn down (popup hidden); nil before it has ever been shown.
     var hiddenAt: Date?
     /// Hidden for longer than this → the next open starts over from the initial view.
@@ -84,6 +87,7 @@ final class SkyScene {
         buildAzimuthTick()
         dome.renderingOrder = 10          // after the opaque terminal, so faded dots blend over it
         scene.rootNode.addChildNode(dome)
+        scene.rootNode.addChildNode(beams.root)
         buildLightsAndCamera()
     }
 
@@ -113,6 +117,7 @@ final class SkyScene {
 
         guard let status else {
             alignmentFocusAzimuthDeg = nil
+            beams.setBoresight(nil)
             if !terminal.isHidden { terminal.isHidden = true }
             if !azimuthTick.isHidden { azimuthTick.isHidden = true; azimuthLabel.isHidden = true }
             if !outline.isHidden { outline.isHidden = true }
@@ -123,6 +128,7 @@ final class SkyScene {
         let a = status.alignment
         let axes = Self.dishAxes(status)
         let ideal = Self.idealAxes(axes, alignment: a)
+        beams.setBoresight(axes.columns.2)
         let wasFocused = alignmentFocusAzimuthDeg != nil
         alignmentFocusAzimuthDeg = Self.needsAlignmentMode(a, wasOn: wasFocused)
             ? ideal.flatMap(Self.boresightAzimuthDeg) ?? a.desiredAzimuthDeg : nil
@@ -597,6 +603,8 @@ struct SkySceneView: NSViewRepresentable {
     let sky: SkyScene
     let status: DishStatus?
     let map: ObstructionMap?
+    let constellation: Constellation?
+    let observer: Observer
     var onRefresh: () -> Void = {}
 
     func makeCoordinator() -> SkyScene { sky }
@@ -626,6 +634,7 @@ struct SkySceneView: NSViewRepresentable {
         let fresh = sky.hiddenAt.map { Date().timeIntervalSince($0) > SkyScene.resetAfterHiddenSeconds } ?? true
         if fresh { sky.resetCameraAim() }
         sky.update(status: status, map: map)
+        applySatellites(v)
         v.focusAzimuthDeg = sky.alignmentFocusAzimuthDeg
         if fresh { v.restartAutoOrbit() } else { v.resumeAutoOrbit() }
         return v
@@ -634,7 +643,14 @@ struct SkySceneView: NSViewRepresentable {
     func updateNSView(_ v: OrbitingSCNView, context: Context) {
         v.onRefresh = onRefresh
         sky.update(status: status, map: map)
+        applySatellites(v)
         v.focusAzimuthDeg = sky.alignmentFocusAzimuthDeg
+    }
+
+    private func applySatellites(_ v: OrbitingSCNView) {
+        sky.beams.setConstellation(constellation)
+        sky.beams.setObserver(observer)
+        v.keepsRendering = sky.beams.isActive        // the beams move, so keep drawing while they're shown
     }
 
     static func dismantleNSView(_ v: OrbitingSCNView, coordinator sky: SkyScene) {
@@ -670,6 +686,14 @@ final class OrbitingSCNView: SCNView {
     }
     private let orbit: AutoOrbit
     private var appliedFocusAzimuthDeg: Float?
+    /// Keep drawing even while the camera is still (satellite beams are animating).
+    var keepsRendering = false {
+        didSet {
+            guard keepsRendering != oldValue, window != nil else { return }
+            if keepsRendering { rendersContinuously = true }
+            else if case .idle = orbit.currentMode { rendersContinuously = false }
+        }
+    }
     var onRefresh: () -> Void = {}
     private let target: SIMD3<Float>
     private var eventMonitor: Any?
@@ -694,7 +718,7 @@ final class OrbitingSCNView: SCNView {
                 MainActor.assumeIsolated {
                     // Parked in alignment mode: stop drawing until something changes.
                     guard let self, case .idle = self.orbit.currentMode else { return }
-                    self.rendersContinuously = false
+                    self.rendersContinuously = self.keepsRendering
                 }
             }
         }
@@ -731,6 +755,7 @@ final class OrbitingSCNView: SCNView {
             rendersContinuously = true       // finish the coast, then orbit once still
             waitForStillThenOrbit()
         case .idle:
+            rendersContinuously = keepsRendering
             waitForStillThenOrbit()          // was parked, held or settling: resume after it's still
         }
     }
@@ -749,7 +774,7 @@ final class OrbitingSCNView: SCNView {
 
     private func pauseOrbit() {
         orbit.setMode(.idle)
-        rendersContinuously = false
+        rendersContinuously = keepsRendering
     }
 
     /// Polls the camera (cheaply, 10×/s, only during this wait) and starts the orbit once it has
@@ -906,7 +931,13 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     /// Called (on the render thread) when `.focus` has parked the camera and gone idle.
     var onParked: (@Sendable () -> Void)?
 
-    init(target: SIMD3<Float>) { self.target = target }
+    /// Animated every frame after the camera moves (they face the camera).
+    private let beams: SatelliteBeams?
+
+    init(target: SIMD3<Float>, beams: SatelliteBeams? = nil) {
+        self.target = target
+        self.beams = beams
+    }
 
     var currentMode: Mode {
         lock.lock(); defer { lock.unlock() }
@@ -942,19 +973,26 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     }
 
     func renderer(_ renderer: any SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
         guard let cam = renderer.pointOfView else { return }
+        lock.lock()
         SkyScene.applyLensShift(to: cam, viewport: renderer.currentViewport.size)
-        if case .idle = mode { return }
+        let parked = driveCamera(cam, time: time)
+        lock.unlock()
+        beams?.renderFrame(cameraPosition: cam.simdWorldPosition)
+        if parked, let onParked { onParked() }
+    }
+
+    /// Moves the camera one frame; true when `.focus` has just parked it. Called with `lock` held.
+    private func driveCamera(_ cam: SCNNode, time: TimeInterval) -> Bool {
+        if case .idle = mode { return false }
         let dt = Float(min(1.0 / 20, time - (lastTime ?? time)))   // cap hitches so they don't jump
         lastTime = time
         elapsed += dt
-        guard dt > 0 else { return }
+        guard dt > 0 else { return false }
 
         let rel = cam.simdPosition - target
         let dist = simd_length(rel)
-        guard dist > 1e-3 else { return }
+        guard dist > 1e-3 else { return false }
         let el0 = asin(max(-1, min(1, rel.y / dist)))
         let az0 = atan2(rel.x, -rel.z)
         var el = el0, az = az0
@@ -964,7 +1002,7 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
 
         switch mode {
         case .idle:
-            return
+            return false
         case .coast(var azRate, var elRate):
             let decay = exp(-dt / Self.coastSeconds)
             azRate *= decay
@@ -1007,6 +1045,6 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
 
         cam.simdPosition = target + SIMD3(cos(el) * sin(az), sin(el), -cos(el) * cos(az)) * dist
         cam.simdLook(at: target, up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
-        if parked, let onParked { onParked() }
+        return parked
     }
 }
