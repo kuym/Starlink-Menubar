@@ -89,6 +89,7 @@ final class SkyScene {
         earth = EarthView(beams: beams)
         scene.background.contents = Self.background
         scene.rootNode.addChildNode(earth.earthRoot)
+        scene.rootNode.addChildNode(earth.starRoot)
         scene.rootNode.addChildNode(earth.dishRoot)
         buildGround()
         buildCompass()

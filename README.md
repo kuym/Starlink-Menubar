@@ -56,7 +56,13 @@ public satellite orbit data from CelesTrak. It needs no account and has no third
   (smootherstep) 1 s move, and a double-click mid-zoom turns it round. The globe is dark, with low-poly
   dark grey continents (Natural Earth 1:110m land, simplified to under 900 vertices) and a faint 15°
   graticule. Around it every Starlink satellite is a small white dot, and the dish's beams run from its
-  location to the satellites in its field of view, at the same strengths as in the dish view. The zoom
+  location to the satellites in its field of view, at the same strengths as in the dish view. Behind it
+  are the 500 brightest stars (Yale Bright Star Catalogue, magnitude 4 and brighter). Sirius is drawn at 80%
+  of a satellite's grey, and the rest through a gamma (grey ∝ flux^γ, γ ≈ 0.06 from the catalogue) that
+  puts the brighter half of them in the top quarter of the range; the brighter stars are also bigger, up to
+  about 4 pixels across. They sit at infinity, where they really are
+  relative to the Earth at the current sidereal time, so as the camera circles the globe the constellations
+  sweep past behind it as they would for a spacecraft in orbit. The zoom
   starts with the dish's location on top, lined up with the dish view. Over its second half the globe tilts
   to stand north-up, so the camera's orbit (same speed and direction as the dish view) spins it about its
   poles, west to east like the real Earth. The zoom out also swings the view round so that it ends with the

@@ -36,6 +36,18 @@ final class EarthView: @unchecked Sendable {
     private let beams: SatelliteBeams
     private let globe = SCNNode()
     private let satellites = SCNNode()
+    /// The background stars: centred on the camera (so they're at infinity, with no parallax), in the Earth-fixed
+    /// frame turned back by sidereal time, so they hold still against the sky while the globe spins under them.
+    let starRoot = SCNNode()
+    /// Distance of the star sphere from the camera: well past the globe, inside the far plane (150).
+    static let starDistance: Float = 100
+    /// The brightest star's grey as a fraction of the satellites' (0.8).
+    static let starPeak: Float = 0.8
+    /// Brightness compression: grey ∝ flux^γ, with γ chosen so the median star is drawn at this fraction of the
+    /// brightest's, putting the brighter half of the stars in the top quarter of the range.
+    static let starMedianLevel: Float = 0.75
+    /// Point radius (pixels) by magnitude, brightest first: the bright stars cover more pixels.
+    static let starSizes: [(brighterThan: Float, radius: CGFloat)] = [(0.5, 4.0), (1.5, 3.2), (2.5, 2.4), (.infinity, 1.7)]
     private let marker = SCNNode()
     private let beamRoot = SCNNode()
     private var beamPool: [SCNNode] = []
@@ -99,6 +111,10 @@ final class EarthView: @unchecked Sendable {
 
         satellites.renderingOrder = -10
         earthRoot.addChildNode(satellites)
+
+        starRoot.geometry = Self.starGeometry()
+        starRoot.renderingOrder = -30                // first: the globe and everything else draws over them
+        starRoot.isHidden = true
 
         let dot = SCNSphere(radius: 1)
         dot.segmentCount = 12
@@ -252,6 +268,7 @@ final class EarthView: @unchecked Sendable {
         beams.renderFrame(cameraPosition: SIMD3(dishCam.x, dishCam.y, dishCam.z), date: date)
         guard !earthRoot.isHidden else { return }
         updateSatellites(constellation, at: date)
+        updateStars(camera: cam, date: date)
         let earthCam = simd_mul(simd_inverse(earthRoot.simdTransform), SIMD4(cam, 1))
         updateBeams(observer, camera: SIMD3(earthCam.x, earthCam.y, earthCam.z))
     }
@@ -304,6 +321,8 @@ final class EarthView: @unchecked Sendable {
         earthRoot.isHidden = earthOpacity <= 0.001
         // The satellites would swarm around the camera while the globe is huge: they come in last.
         satellites.opacity = CGFloat(Self.smoothstep(0.4, 0.9, z))
+        starRoot.opacity = satellites.opacity
+        starRoot.isHidden = satellites.opacity <= 0.001
         marker.simdScale = SIMD3(repeating: 0.012 / earthRadius)
     }
 
@@ -358,6 +377,74 @@ final class EarthView: @unchecked Sendable {
         let geo = SCNGeometry(sources: [source], elements: [element])
         geo.materials = [satelliteMaterial]
         satellites.geometry = geo
+    }
+
+    /// Keeps the star sphere on the camera, and turned with the globe less the Earth's rotation since the
+    /// vernal equinox crossed Greenwich: Earth-fixed = R_z(−GMST) · inertial.
+    private func updateStars(camera: SIMD3<Float>, date: Date) {
+        guard !starRoot.isHidden else { return }
+        let m = earthRoot.simdTransform
+        let rotation = simd_quatf(simd_float3x3(simd_normalize(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z)),
+                                                simd_normalize(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z)),
+                                                simd_normalize(SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))))
+        let gmst = Float(SGP4.gstime(SGP4.julianDate(date)))
+        starRoot.simdPosition = camera
+        starRoot.simdOrientation = rotation * simd_quatf(angle: -gmst, axis: SIMD3(0, 0, 1))
+    }
+
+    /// The catalogue's stars as points on a sphere of radius `starDistance` (inertial: x to the vernal equinox,
+    /// z to the north celestial pole), added onto the background in grey levels by magnitude. The brighter
+    /// ones are drawn a little larger.
+    static func starGeometry() -> SCNGeometry {
+        let rows = Stars.encoded.split(separator: ";").map { $0.split(separator: ",").compactMap { Float($0) } }
+            .filter { $0.count == 3 }
+        let mags = rows.map { $0[2] / 100 }                 // brightest first
+        guard let brightest = mags.first else { return SCNGeometry() }
+        // Flux relative to the brightest is 10^(−0.4 Δm); solve median^γ = starMedianLevel for γ.
+        func flux(_ m: Float) -> Float { pow(10, -0.4 * (m - brightest)) }
+        let gamma = log(starMedianLevel) / log(flux(mags[mags.count / 2]))
+        // Grey levels as displayed (sRGB, like the satellites' 0.8), made linear: the blend adds light linearly.
+        func linear(_ c: Float) -> Float { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        var points: [SIMD3<Float>] = [], colours: [SIMD4<Float>] = []
+        for (r, mag) in zip(rows, mags) {
+            let ra = r[0] / 100 * .pi / 180, dec = r[1] / 100 * .pi / 180
+            points.append(SIMD3(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec)) * starDistance)
+            let level = linear(0.8 * starPeak * pow(flux(mag), gamma))
+            colours.append(SIMD4(level, level, level, 1))
+        }
+        let vertices = points.withUnsafeBufferPointer { buf in
+            SCNGeometrySource(data: Data(buffer: buf), semantic: .vertex, vectorCount: buf.count,
+                              usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4,
+                              dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)
+        }
+        let colors = colours.withUnsafeBufferPointer { buf in
+            SCNGeometrySource(data: Data(buffer: buf), semantic: .color, vectorCount: buf.count,
+                              usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: 4,
+                              dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride)
+        }
+        func element(_ range: Range<Int>, radius: CGFloat) -> SCNGeometryElement {
+            let indices = range.map { UInt32($0) }
+            let e = SCNGeometryElement(indices: indices, primitiveType: .point)
+            e.pointSize = 1
+            e.minimumPointScreenSpaceRadius = radius
+            e.maximumPointScreenSpaceRadius = radius
+            return e
+        }
+        var elements: [SCNGeometryElement] = [], from = 0
+        for size in starSizes {
+            let to = mags[from...].firstIndex { $0 >= size.brighterThan } ?? mags.count
+            if to > from { elements.append(element(from..<to, radius: size.radius)) }
+            from = to
+        }
+        let geo = SCNGeometry(sources: [vertices, colors], elements: elements)
+        let m = SCNMaterial()
+        m.lightingModel = .constant
+        m.diffuse.contents = NSColor.white
+        m.blendMode = .add
+        m.writesToDepthBuffer = false
+        m.readsFromDepthBuffer = false
+        geo.materials = [m]
+        return geo
     }
 
     private let satelliteMaterial: SCNMaterial = {
