@@ -1,10 +1,10 @@
 # Starlink-Menubar
 
-![The popup: a 3D sky view of the dish's obstruction map, with a latency graph and link stats below](https://github.com/kuym/Starlink-menubar/raw/main/docs/screenshot-1.png "Screenshot")
-
 Starlink Menu Bar is a small native macOS app for checking your Starlink connection at a glance. When your Mac
 is online through a Starlink dish, the menu bar shows its signal strength and flags obstructions,
 misalignment and faults. Click the icon to open a 3D view of the sky, like the one in the Starlink app:
+
+https://github.com/user-attachments/assets/9f8427b1-8c61-474e-82c2-2cdadca635c2
 
 * the dish's obstruction map, drawn on a dome;
 * the dish's current pointing and its ideal orientation, so you can align it by hand;
@@ -17,6 +17,8 @@ The app talks directly to the dish on your local network. The only other request
 public satellite orbit data from CelesTrak. It needs no account and has no third-party dependencies.
 
 ## Features
+
+![The popup: a 3D sky view of the dish's obstruction map, with a latency graph and link stats below](https://github.com/kuym/Starlink-menubar/raw/main/docs/screenshot-1.png "Screenshot")
 
 * **Menu bar icon**: a phone-style 4-bar signal indicator. It is replaced by an orange tree when the dish is **obstructed**, a yellow crosshair when it is **misaligned**, and red icons for thermal or hardware faults and disabled service. A crossed-out antenna means no Starlink dish was found.
 * **Popup**: the whole window is the 3D sky view (below), with a heads-up display over it:
