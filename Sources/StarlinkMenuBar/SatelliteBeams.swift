@@ -59,6 +59,8 @@ final class SatelliteBeams: @unchecked Sendable {
     private struct Beam { let node: SCNNode; var level: Float }
     private var beams: [Int: Beam] = [:]
     private var pool: [SCNNode] = []
+    /// The beams drawn in the last frame (render thread only), for the Earth view to draw the same.
+    private(set) var frameBeams: [(dir: SIMD3<Float>, range: Float, opacity: Float, boost: Float)] = []
     /// Satellites in view after the last frame (for the snapshot tool's report).
     private(set) var lastVisible: [(satnum: Int, elevationDeg: Float, rangeKm: Float, closest: Bool)] = []
 
@@ -107,6 +109,12 @@ final class SatelliteBeams: @unchecked Sendable {
     func setBoresight(_ b: SIMD3<Float>?) {
         lock.lock(); defer { lock.unlock() }
         boresight = b
+    }
+
+    /// The constellation and observer currently in use (for the Earth view).
+    var inputs: (Constellation?, Observer?) {
+        lock.lock(); defer { lock.unlock() }
+        return (constellation, observer)
     }
 
     /// True when there is something to draw (and so the view should keep rendering to animate it).
@@ -163,6 +171,7 @@ final class SatelliteBeams: @unchecked Sendable {
 
         let origin = SkyScene.terminalCenter + boresight * (SkyScene.terminalThickness / 2)
         var shown = Set<Int>()
+        frameBeams.removeAll(keepingCapacity: true)
         for v in visible {
             let target: Float = v.id == closest ? 1 : Self.dimLevel * Self.boresightFalloff(v.dir, boresight)
             var beam: Beam
@@ -178,10 +187,11 @@ final class SatelliteBeams: @unchecked Sendable {
             place(beam.node, origin: origin, dir: v.dir, camera: cam)
             beam.node.opacity = CGFloat(beam.level * v.weight)
             // Bloom fades in with the level: none at the dim level, full on the closest beam.
-            let boost = CGFloat(Self.bloomBoost * max(0, (beam.level - Self.dimLevel) / (1 - Self.dimLevel)))
-            if let m = beam.node.geometry?.firstMaterial, abs(m.emission.intensity - boost) > 0.01 {
-                m.emission.intensity = boost
+            let boost = Self.bloomBoost * max(0, (beam.level - Self.dimLevel) / (1 - Self.dimLevel))
+            if let m = beam.node.geometry?.firstMaterial, abs(m.emission.intensity - CGFloat(boost)) > 0.01 {
+                m.emission.intensity = CGFloat(boost)
             }
+            frameBeams.append((v.dir, v.range, beam.level * v.weight, boost))
             if beam.node.isHidden { beam.node.isHidden = false }
         }
         for (id, b) in beams where !shown.contains(id) {
@@ -198,6 +208,7 @@ final class SatelliteBeams: @unchecked Sendable {
         for (_, b) in beams { b.node.isHidden = true; pool.append(b.node) }
         beams = [:]
         lastVisible = []
+        frameBeams = []
     }
 
     /// A long quad from the dish face along `dir`, turned about that axis to face the camera (at the point of

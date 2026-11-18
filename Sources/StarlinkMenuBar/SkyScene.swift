@@ -18,6 +18,9 @@ final class SkyScene {
     /// and compass rose centred in the space above the latency graph (equal margins to the window top and
     /// the graph) both looking straight down and at the 30° auto-orbit, with only gentle drift in between.
     nonisolated static let orbitCenter = SIMD3<Float>(0, groundY + 0.19, 0)
+    /// The initial view's camera distance from `orbitCenter` and horizontal field of view (both views').
+    nonisolated static let cameraDistance: Float = 4.4
+    nonisolated static let cameraFieldOfView: CGFloat = 36.85
     /// A constant shift-lens offset (normalised device units, 2 = full height) that moves the pivot's image
     /// from the window's centre up to the centre of the space above the bottom HUD: 70 of 435 pt.
     nonisolated static let lensShiftY: Float = 70.0 / 435.0
@@ -64,9 +67,13 @@ final class SkyScene {
 
     /// Camera motion state. Lives here, not in the view, so it survives the popup closing: the SCNView is
     /// torn down while hidden, and a quick reopen carries on with the same angle and angular velocity.
-    private(set) lazy var autoOrbit = AutoOrbit(target: cameraTarget, beams: beams)
+    private(set) lazy var autoOrbit = AutoOrbit(target: cameraTarget, earth: earth)
     /// Beams to the satellites in the dish's field of view (animated from the render loop).
     let beams = SatelliteBeams()
+    /// The zoomed-out globe, and the zoom between it and this dish view (double-click).
+    let earth: EarthView
+    /// Everything in the dish view hangs off this, so the zoom can shrink it as one.
+    private var dishRoot: SCNNode { earth.dishRoot }
     /// When the sky view was last torn down (popup hidden); nil before it has ever been shown.
     var hiddenAt: Date?
     /// Hidden for longer than this → the next open starts over from the initial view.
@@ -79,15 +86,18 @@ final class SkyScene {
     private var domeOpacity: CGFloat { alignmentFocusAzimuthDeg == nil ? 1 : Self.alignmentModeDotOpacity }
 
     init() {
+        earth = EarthView(beams: beams)
         scene.background.contents = Self.background
+        scene.rootNode.addChildNode(earth.earthRoot)
+        scene.rootNode.addChildNode(earth.dishRoot)
         buildGround()
         buildCompass()
         buildTerminal()
         buildOutline()
         buildAzimuthTick()
         dome.renderingOrder = 10          // after the opaque terminal, so faded dots blend over it
-        scene.rootNode.addChildNode(dome)
-        scene.rootNode.addChildNode(beams.root)
+        dishRoot.addChildNode(dome)
+        dishRoot.addChildNode(beams.root)
         buildLightsAndCamera()
     }
 
@@ -132,6 +142,8 @@ final class SkyScene {
         let wasFocused = alignmentFocusAzimuthDeg != nil
         alignmentFocusAzimuthDeg = Self.needsAlignmentMode(a, wasOn: wasFocused)
             ? ideal.flatMap(Self.boresightAzimuthDeg) ?? a.desiredAzimuthDeg : nil
+        // The initial view (below), which a zoom back in from the Earth view also lands on.
+        earth.setHomeAzimuth(alignmentFocusAzimuthDeg ?? (Self.boresightAzimuthDeg(axes) ?? a.azimuthDeg) - Self.initialSweepOffsetDeg)
         if !hasAimedCamera {
             hasAimedCamera = true
             if let focus = alignmentFocusAzimuthDeg {
@@ -227,7 +239,7 @@ final class SkyScene {
         cam.projectionTransform = SCNMatrix4(shift * p)
     }
 
-    func orbit(azimuthDeg: Float, elevationDeg: Float, distance: Float = 4.4) {
+    func orbit(azimuthDeg: Float, elevationDeg: Float, distance: Float = SkyScene.cameraDistance) {
         let d = Self.direction(azDeg: azimuthDeg, elDeg: elevationDeg)
         cameraNode.simdPosition = cameraTarget + d * distance
         cameraNode.simdLook(at: cameraTarget, up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
@@ -381,8 +393,9 @@ final class SkyScene {
             #pragma varyings
             float facing;
             #pragma body
-            float3 wp = (scn_node.modelTransform * _geometry.position).xyz;
-            float3 cam = scn_frame.inverseViewTransform[3].xyz;
+            // In the dish scene's own coordinates (the node sits at its root), which the zoom scales.
+            float3 wp = _geometry.position.xyz;
+            float3 cam = (scn_node.inverseModelTransform * float4(scn_frame.inverseViewTransform[3].xyz, 1.0)).xyz;
             float3 centre = float3(0.0, \(groundY), 0.0);
             float2 radial = (wp - centre).xz;              // horizontal: near half vs far half
             float2 toCam = normalize((cam - centre).xz + float2(1e-5, 0.0));
@@ -409,12 +422,34 @@ final class SkyScene {
         m.lightingModel = .lambert
         m.diffuse.contents = NSColor(white: 0.55, alpha: 1)
         m.emission.contents = Self.background            // unlit ground blends into the background
+        // Beyond the light pool the ground is exactly the background colour; fading it out there changes
+        // nothing in the dish view, but as the zoom shrinks the scene the globe shows round it, not a square.
+        m.transparent.contents = Self.groundMask(fadeFrom: 2.0 / 6, to: 4.5 / 6)
+        m.transparencyMode = .rgbZero
         plane.materials = [m]
         let node = SCNNode(geometry: plane)
         node.eulerAngles.x = -.pi / 2
         node.simdPosition = SIMD3(0, Self.groundY, 0)
         node.categoryBitMask = Self.groundMask
-        scene.rootNode.addChildNode(node)
+        dishRoot.addChildNode(node)
+    }
+
+    /// Transparency mask (`.rgbZero`: black = opaque): opaque inside `fadeFrom`, clear beyond `to` (as
+    /// fractions of the half-width), smoothly between.
+    private static func groundMask(fadeFrom r0: Float, to r1: Float) -> CGImage? {
+        let n = 256
+        var px = [UInt8](repeating: 0, count: n * n)
+        for y in 0..<n {
+            for x in 0..<n {
+                let u = (Float(x) + 0.5) / Float(n) * 2 - 1, v = (Float(y) + 0.5) / Float(n) * 2 - 1
+                let t = max(0, min(1, ((u * u + v * v).squareRoot() - r0) / (r1 - r0)))
+                px[y * n + x] = UInt8((255 * t * t * (3 - 2 * t)).rounded())
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(px) as CFData) else { return nil }
+        return CGImage(width: n, height: n, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: n,
+                       space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     private func buildCompass() {
@@ -434,7 +469,7 @@ final class SkyScene {
             tick.simdEulerAngles.y = -az * .pi / 180
             ticks.addChildNode(tick)
         }
-        scene.rootNode.addChildNode(ticks.flattenedClone())
+        dishRoot.addChildNode(ticks.flattenedClone())
 
         for (label, az) in [("N", Float(0)), ("E", 90), ("S", 180), ("W", 270)] {
             let text = SCNText(string: label, extrusionDepth: 0)
@@ -451,7 +486,7 @@ final class SkyScene {
             node.scale = SCNVector3(0.014, 0.014, 0.014)
             node.simdPosition = Self.direction(azDeg: az, elDeg: 0) * radius + SIMD3(0, Self.groundY + 0.06, 0)
             node.constraints = [SCNBillboardConstraint()]
-            scene.rootNode.addChildNode(node)
+            dishRoot.addChildNode(node)
         }
     }
 
@@ -468,7 +503,7 @@ final class SkyScene {
         terminal.simdPosition = Self.terminalCenter
         terminal.categoryBitMask = Self.objectMask
         terminal.isHidden = true
-        scene.rootNode.addChildNode(terminal)
+        dishRoot.addChildNode(terminal)
     }
 
     private func buildAzimuthTick() {
@@ -483,12 +518,12 @@ final class SkyScene {
         tick.simdPosition = SIMD3(0, Self.groundY + 0.003, -(r0 + Self.azimuthTickLength / 2))
         azimuthTick.addChildNode(tick)
         azimuthTick.isHidden = true
-        scene.rootNode.addChildNode(azimuthTick)
+        dishRoot.addChildNode(azimuthTick)
 
         azimuthLabel.scale = SCNVector3(0.0085, 0.0085, 0.0085)
         azimuthLabel.constraints = [SCNBillboardConstraint()]
         azimuthLabel.isHidden = true
-        scene.rootNode.addChildNode(azimuthLabel)
+        dishRoot.addChildNode(azimuthLabel)
     }
 
     private func updateAzimuthTick(_ a: DishStatus.Alignment) {
@@ -537,7 +572,7 @@ final class SkyScene {
         }
         outline.simdPosition = Self.terminalCenter
         outline.isHidden = true
-        scene.rootNode.addChildNode(outline)
+        dishRoot.addChildNode(outline)
     }
 
     private func buildLightsAndCamera() {
@@ -552,8 +587,9 @@ final class SkyScene {
         glow.categoryBitMask = Self.groundMask | Self.objectMask
         let glowNode = SCNNode()
         glowNode.light = glow
+        earth.glowLight = glow
         glowNode.simdPosition = .zero
-        scene.rootNode.addChildNode(glowNode)
+        dishRoot.addChildNode(glowNode)
 
         // Soft key and fill light for the terminal only, so its faces read as a solid.
         let key = SCNLight()
@@ -563,7 +599,7 @@ final class SkyScene {
         let keyNode = SCNNode()
         keyNode.light = key
         keyNode.simdLook(at: SIMD3(0.4, -1, 0.3), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
-        scene.rootNode.addChildNode(keyNode)
+        dishRoot.addChildNode(keyNode)
 
         // (Not an ambient light: SceneKit applies ambient lights to every node regardless of category mask,
         // which would wash out the ground.)
@@ -574,14 +610,14 @@ final class SkyScene {
         let fillNode = SCNNode()
         fillNode.light = fill
         fillNode.simdLook(at: SIMD3(-0.5, 0.3, -0.6), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
-        scene.rootNode.addChildNode(fillNode)
+        dishRoot.addChildNode(fillNode)
 
         let cam = SCNCamera()
         // Horizontal FOV: the scene keeps its scale whatever the popup's height (the window is a fixed width).
         cam.projectionDirection = .horizontal
-        cam.fieldOfView = 36.85
+        cam.fieldOfView = Self.cameraFieldOfView
         cam.zNear = 0.05
-        cam.zFar = 50
+        cam.zFar = 150                                   // the globe starts out huge as the zoom-out begins
         cam.wantsHDR = true
         cam.wantsExposureAdaptation = false
         cam.bloomThreshold = 1.0
@@ -610,7 +646,7 @@ struct SkySceneView: NSViewRepresentable {
     func makeCoordinator() -> SkyScene { sky }
 
     func makeNSView(context: Context) -> OrbitingSCNView {
-        let v = OrbitingSCNView(frame: .zero, target: sky.cameraTarget, orbit: sky.autoOrbit)
+        let v = OrbitingSCNView(frame: .zero, target: sky.cameraTarget, orbit: sky.autoOrbit, earth: sky.earth)
         v.scene = sky.scene
         v.pointOfView = sky.cameraNode
         v.backgroundColor = SkyScene.background
@@ -624,15 +660,15 @@ struct SkySceneView: NSViewRepresentable {
         c.target = SCNVector3(sky.cameraTarget)
         // SceneKit's built-in inertia stops abruptly at a fixed (fairly high) speed; AutoOrbit coasts instead.
         c.inertiaEnabled = false
-        c.maximumVerticalAngle = 88
-        c.minimumVerticalAngle = 4
+        c.maximumVerticalAngle = AutoOrbit.maxElevationDeg
         v.cameraControlConfiguration.allowsTranslation = false
         v.cameraControlConfiguration.rotationSensitivity = 0.8
         // At launch, or after being hidden a while, start over from the initial view; after a brief close,
         // carry on exactly where the camera was (the motion is frozen while hidden, not simulated).
         v.onRefresh = onRefresh
         let fresh = sky.hiddenAt.map { Date().timeIntervalSince($0) > SkyScene.resetAfterHiddenSeconds } ?? true
-        if fresh { sky.resetCameraAim() }
+        if fresh { sky.resetCameraAim(); sky.earth.set(0) }   // the initial view is the dish view
+        v.updateElevationLimit()
         sky.update(status: status, map: map)
         applySatellites(v)
         v.focusAzimuthDeg = sky.alignmentFocusAzimuthDeg
@@ -650,7 +686,7 @@ struct SkySceneView: NSViewRepresentable {
     private func applySatellites(_ v: OrbitingSCNView) {
         sky.beams.setConstellation(constellation)
         sky.beams.setObserver(observer)
-        v.keepsRendering = sky.beams.isActive        // the beams move, so keep drawing while they're shown
+        v.beamsActive = sky.beams.isActive           // the beams move, so keep drawing while they're shown
     }
 
     static func dismantleNSView(_ v: OrbitingSCNView, coordinator sky: SkyScene) {
@@ -686,18 +722,47 @@ final class OrbitingSCNView: SCNView {
     }
     private let orbit: AutoOrbit
     private var appliedFocusAzimuthDeg: Float?
-    /// Keep drawing even while the camera is still (satellite beams are animating).
-    var keepsRendering = false {
-        didSet {
-            guard keepsRendering != oldValue, window != nil else { return }
-            if keepsRendering { rendersContinuously = true }
-            else if case .idle = orbit.currentMode { rendersContinuously = false }
+    private let earth: EarthView
+    /// Satellite beams are showing (they animate).
+    var beamsActive = false {
+        didSet { if beamsActive != oldValue { refreshRendering() } }
+    }
+    /// Keep drawing even while the camera is still: beams animating, or the Earth view (zooming or shown).
+    var keepsRendering: Bool { beamsActive || earth.isAnimatingOrOut }
+    private var zoomTimer: Timer?
+
+    private func refreshRendering() {
+        guard window != nil else { return }
+        if keepsRendering { rendersContinuously = true }
+        else if case .idle = orbit.currentMode { rendersContinuously = false }
+    }
+
+    /// Dragging can go below the horizon, to the south pole, only in the Earth view (the dish view stays above
+    /// ground). Kept open while zooming in, which brings the camera back up itself.
+    func updateElevationLimit() {
+        defaultCameraController.minimumVerticalAngle = AutoOrbit.minElevationDeg(earthView: earth.isAnimatingOrOut)
+    }
+
+    /// Double-click: zoom out to the Earth view, or back in.
+    private func toggleZoom() {
+        earth.toggle()
+        updateElevationLimit()
+        rendersContinuously = true
+        // Once the zoom has finished, drop back to drawing on demand if nothing else is moving.
+        zoomTimer?.invalidate()
+        let t = Timer(timeInterval: EarthView.duration + 0.05, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.zoomTimer = nil; self?.updateElevationLimit(); self?.refreshRendering() }
         }
+        RunLoop.main.add(t, forMode: .common)
+        zoomTimer = t
     }
     var onRefresh: () -> Void = {}
     private let target: SIMD3<Float>
     private var eventMonitor: Any?
     private var dragging = false
+    /// The press has become a drag (or caught a coasting camera): plain clicks leave the motion alone, so
+    /// a double-click zooms without pausing the orbit.
+    private var dragMoved = false
     private var dragSamples: [(time: TimeInterval, az: Float, el: Float)] = []
 
     // Stillness detection after a gesture.
@@ -708,8 +773,9 @@ final class OrbitingSCNView: SCNView {
     static let stillCheckInterval: TimeInterval = 0.1
     static let stillAngularSpeed: Float = 0.0025 * .pi / 180   // rad/s: just above the coast cutoff
 
-    init(frame: CGRect, target: SIMD3<Float>, orbit: AutoOrbit) {
+    init(frame: CGRect, target: SIMD3<Float>, orbit: AutoOrbit, earth: EarthView) {
         self.orbit = orbit
+        self.earth = earth
         self.target = target
         super.init(frame: frame, options: nil)
         delegate = orbit
@@ -837,12 +903,15 @@ final class OrbitingSCNView: SCNView {
         let menu = NSMenu()
         menu.addItem(withTitle: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Open Dish Web UI", action: #selector(openWebUI), keyEquivalent: "").target = self
+        menu.addItem(withTitle: earth.isZoomedOut ? "Zoom In to Dish" : "Zoom Out to Earth",
+                     action: #selector(zoomFromMenu), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Starlink Menu Bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     @objc private func refreshNow() { onRefresh() }
+    @objc private func zoomFromMenu() { toggleZoom() }
     @objc private func openWebUI() { NSWorkspace.shared.open(URL(string: "http://192.168.100.1")!) }
 
     // A local event monitor sees gestures regardless of how SceneKit's camera control consumes them.
@@ -852,29 +921,44 @@ final class OrbitingSCNView: SCNView {
         guard window != nil else { cancelStillWait(); return }
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel, .magnify]
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
-            return event
+            MainActor.assumeIsolated { self?.handle(event) ?? true } ? event : nil
         }
     }
 
-    private func handle(_ event: NSEvent) {
-        guard event.window === window else { return }
+    /// Returns false to swallow the event.
+    private func handle(_ event: NSEvent) -> Bool {
+        guard event.window === window else { return true }
         let inside = bounds.contains(convert(event.locationInWindow, from: nil))
         switch event.type {
+        case .leftMouseDown where inside && event.clickCount == 2:
+            // Kept from SceneKit's camera control, which would otherwise treat it as the start of a drag.
+            dragging = false
+            toggleZoom()
+            return false
         case .leftMouseDown:
-            guard inside else { return }
+            guard inside else { return true }
             dragging = true
+            dragMoved = false
             dragSamples.removeAll()
-            stopAutoOrbit()                  // holding the camera: don't resume until released
+            if case .coast = orbit.currentMode {
+                dragMoved = true
+                stopAutoOrbit()              // caught the spinning camera: hold it until released
+            }
         case .leftMouseDragged:
+            guard dragging else { return true }
+            if !dragMoved {
+                dragMoved = true
+                stopAutoOrbit()              // holding the camera: don't resume until released
+            }
             // The monitor runs before SceneKit handles this event, so this records the pose produced by
             // the previous one; the one-event lag doesn't matter for a velocity estimate.
-            guard dragging, let a = cameraAngles() else { return }
+            guard let a = cameraAngles() else { return true }
             dragSamples.append((event.timestamp, a.az, a.el))
             dragSamples.removeAll { event.timestamp - $0.time > 0.25 }
         case .leftMouseUp:
-            guard dragging else { return }
+            guard dragging else { return true }
             dragging = false
+            guard dragMoved else { return true }     // a plain click
             if let a = cameraAngles() { dragSamples.append((event.timestamp, a.az, a.el)) }
             let v = releaseVelocity(at: event.timestamp)
             if v.az != 0 || v.el != 0 {
@@ -883,12 +967,13 @@ final class OrbitingSCNView: SCNView {
             }
             waitForStillThenOrbit()
         case .scrollWheel, .magnify:
-            guard inside else { return }
+            guard inside else { return true }
             pauseOrbit()
             waitForStillThenOrbit()          // keeps running across a stream of scroll events
         default:
             break
         }
+        return true
     }
 }
 
@@ -916,8 +1001,9 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     static let focusMaxPullDeg: Float = 50       // caps cruise speed at ω·pull/2 = 50°/s
     static let focusRampSeconds: Float = 1.0
     static let focusParkDeg: Float = 0.005       // within this (and nearly still) → snap exactly and stop
-    static let minElevationDeg: Float = 4        // same limits as the drag controller
-    static let maxElevationDeg: Float = 88
+    static let maxElevationDeg: Float = 88       // same limits as the drag controller
+    /// Above the ground in the dish view; down to the south pole in the Earth view.
+    static func minElevationDeg(earthView: Bool) -> Float { earthView ? -maxElevationDeg : 4 }
 
     private let target: SIMD3<Float>
     private let lock = NSLock()
@@ -931,12 +1017,12 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     /// Called (on the render thread) when `.focus` has parked the camera and gone idle.
     var onParked: (@Sendable () -> Void)?
 
-    /// Animated every frame after the camera moves (they face the camera).
-    private let beams: SatelliteBeams?
+    /// The zoom, the beams and the Earth view: animated every frame after the camera moves (beams face it).
+    private let earth: EarthView?
 
-    init(target: SIMD3<Float>, beams: SatelliteBeams? = nil) {
+    init(target: SIMD3<Float>, earth: EarthView? = nil) {
         self.target = target
-        self.beams = beams
+        self.earth = earth
     }
 
     var currentMode: Mode {
@@ -978,7 +1064,7 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
         SkyScene.applyLensShift(to: cam, viewport: renderer.currentViewport.size)
         let parked = driveCamera(cam, time: time)
         lock.unlock()
-        beams?.renderFrame(cameraPosition: cam.simdWorldPosition)
+        earth?.renderFrame(camera: cam)
         if parked, let onParked { onParked() }
     }
 
@@ -997,7 +1083,7 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
         let az0 = atan2(rel.x, -rel.z)
         var el = el0, az = az0
         let rad = Float.pi / 180
-        let elRange = Self.minElevationDeg * rad ... Self.maxElevationDeg * rad
+        let elRange = Self.minElevationDeg(earthView: earth?.isAnimatingOrOut ?? false) * rad ... Self.maxElevationDeg * rad
         var parked = false
 
         switch mode {

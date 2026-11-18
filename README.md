@@ -9,6 +9,7 @@ misalignment and faults. Click the icon to open a 3D view of the sky, like the o
 * the dish's obstruction map, drawn on a dome;
 * the dish's current pointing and its ideal orientation, so you can align it by hand;
 * beams to the Starlink satellites currently in the dish's field of view, computed from public orbital data;
+* double-click for an Earth view: a globe with every Starlink satellite around it and the dish's beams;
 * a live latency and packet-loss graph;
 * the current upload and download rates.
 
@@ -26,7 +27,8 @@ public satellite orbit data from CelesTrak. It needs no account and has no third
     above 10%. The line breaks where the link was down.
   * Under the graph: current latency, max and median (`23ms  MAX 80  AVG 42`, `-ms` while down), and on the
     right the current up/down rates.
-  * Right-click the view for Refresh, Open Dish Web UI and Quit; ⌘Q also quits. Without a dish, the popup
+  * Double-click the view to zoom out to the Earth view and back. Right-click it for Refresh, Open Dish Web
+    UI, Zoom Out to Earth / Zoom In to Dish, and Quit; ⌘Q also quits. Without a dish, the popup
     shrinks to a short "not connected" panel.
 * **Sky view** (SceneKit, `SkyScene.swift`): in the style of the Starlink app, the terminal floats above a compass rose
   lit by a point light beneath it. A long tick on the compass rose marks the dish's azimuth, labelled
@@ -49,6 +51,23 @@ public satellite orbit data from CelesTrak. It needs no account and has no third
   the others fade from 33% opacity on the boresight to 0% at the edge of the 67.5° cone. Satellites glide smoothly across the sky and fade in and out at the edges of
   the field of view. The dish talks to one satellite at a time and doesn't say which, so these are the
   candidates it could use, not its actual link.
+- **Earth view** (`EarthView.swift`). Double-click to zoom out: the dish scene shrinks into its spot on a globe
+  while the globe shrinks into view, and double-click again to zoom back in. Each zoom is a single eased
+  (smootherstep) 1 s move, and a double-click mid-zoom turns it round. The globe is dark, with low-poly
+  dark grey continents (Natural Earth 1:110m land, simplified to under 900 vertices) and a faint 15°
+  graticule. Around it every Starlink satellite is a small white dot, and the dish's beams run from its
+  location to the satellites in its field of view, at the same strengths as in the dish view. The zoom
+  starts with the dish's location on top, lined up with the dish view. Over its second half the globe tilts
+  to stand north-up, so the camera's orbit (same speed and direction as the dish view) spins it about its
+  poles, west to east like the real Earth. The zoom out also swings the view round so that it ends with the
+  dish's location 45° to the left (west) of the camera, and the orbit then carries the camera over it. The
+  zoom in ends on the dish view's initial angle, so the camera soon sweeps through the antenna face's
+  mid-plane, as it does at launch. (The swing turns the whole scene rather than the camera, and at the end of
+  a zoom in the turn is handed back to the camera invisibly, so the orbit itself never jumps.) In the
+  Earth view the camera can be dragged down past the equator to the south pole as well as up to the north
+  pole. Each view opens at its default framing however the last one's camera was dragged or zoomed: over
+  each zoom the camera's elevation, distance and field of view also ease back to the initial view's (30°
+  up, so the dish view is above its ground again), alongside the swing that sets the azimuth.
 - **Alignment mode.** When the dish is more than 10° off on azimuth or elevation, the view switches into
   alignment mode, and leaves it again below 9.5° so jitter can't flip it back and forth. In this mode:
   - The dots dim to 33%.
@@ -127,6 +146,13 @@ tolerance so macOS can batch wakeups. Measured idle use is under 0.2 % CPU.
     ones that can rise above the horizon in the meantime: a few hundred.
   * Every second, those are placed at the next whole second.
   * Every frame, the ones in the field of view are interpolated between those points.
+* **Earth view.** The globe is in Earth-fixed coordinates, so the satellites are the same Kepler positions,
+  all ~10,000 of them, recomputed once a second while it shows. At 0.06°/s round the globe they move a
+  fraction of a pixel between updates. The zoom is geometric: the dish scene's scale goes from 1 to 0.03 while
+  the globe's radius goes from 33× to 1× its final size. Their ratio stays fixed and both stay anchored at the
+  dish's location, so it reads as one continuous pull-back. The dish scene fades out over the second half
+  and the globe fades in over the first. The satellites come in last, so they don't swarm the camera while
+  the globe is still huge.
 * **Location.** Satellite directions depend on where the dish is. The local API doesn't report the dish's
   position (unless that is enabled in the Starlink app), so the app uses Cupertino, CA until the HUD's
   location button fetches the Mac's position (to ~1 km, which shifts a beam by ~0.1°). The position is kept in

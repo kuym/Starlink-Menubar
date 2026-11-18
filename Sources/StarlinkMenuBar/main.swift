@@ -79,7 +79,7 @@ if CommandLine.arguments.contains("--dump") {
         scnView.scene = sky.scene
         scnView.pointOfView = sky.cameraNode
         scnView.antialiasingMode = .multisampling4X
-        let first = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }()                         // the view as it first appears
+        let first = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }()                         // the view as it first appears
         for v in sky.beams.lastVisible {
             print(String(format: "  in view: %6d  el %5.1f°  %6.0f km%@", v.satnum, v.elevationDeg, v.rangeKm, v.closest ? "  ← closest" : ""))
         }
@@ -106,11 +106,34 @@ if CommandLine.arguments.contains("--dump") {
         let views: [(String, Float, Float)] = [("south", 200, 34), ("west", 290, 30), ("north", 20, 30), ("top", 180, 88)]
         for (name, az, el) in views {
             sky.orbit(azimuthDeg: az, elevationDeg: el)
-            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }()
+            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }()
             if let tiff = img.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: dir.appendingPathComponent("sky-\(name).png"))
             }
+        }
+        // The zoom out to the Earth view, part way and all the way.
+        for z: Float in [0.15, 0.3, 0.5, 0.7, 1] {
+            sky.earth.set(z)
+            sky.orbit(azimuthDeg: 200, elevationDeg: AutoOrbit.elevationDeg)
+            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }()
+            if let tiff = img.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: dir.appendingPathComponent("earth-zoom-\(Int(z * 100)).png"))
+            }
+        }
+        for (az, el): (Float, Float) in [(20, AutoOrbit.elevationDeg), (110, AutoOrbit.elevationDeg), (200, -80)] {   // other sides; the south pole
+            sky.orbit(azimuthDeg: az, elevationDeg: el)
+            let img = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }()
+            if let tiff = img.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: dir.appendingPathComponent(el < 0 ? "earth-south.png" : "earth-az\(Int(az)).png"))
+            }
+        }
+        sky.earth.set(0)
+        if let map = EarthView.landMap(),
+           let png = NSBitmapImageRep(cgImage: map).representation(using: .png, properties: [:]) {
+            try? png.write(to: dir.appendingPathComponent("earth-map.png"))
         }
         if var aligned = monitor.status {
             // Same scene with the target nudged to within tolerance, to check the "aligned" glow.
@@ -118,7 +141,7 @@ if CommandLine.arguments.contains("--dump") {
             aligned.alignment.desiredElevationDeg = aligned.alignment.elevationDeg - 2
             sky.update(status: aligned, map: monitor.obstructionMap, animated: false)
             sky.orbit(azimuthDeg: 200, elevationDeg: 34)
-            if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }().tiffRepresentation,
+            if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }().tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: dir.appendingPathComponent("sky-aligned.png"))
             }
@@ -129,7 +152,7 @@ if CommandLine.arguments.contains("--dump") {
             sky.update(status: off, map: monitor.obstructionMap, animated: false)
             if let az = sky.alignmentFocusAzimuthDeg {
                 sky.orbit(azimuthDeg: az, elevationDeg: AutoOrbit.elevationDeg)
-                if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.beams.renderFrame(cameraPosition: sky.cameraNode.simdWorldPosition); return scnView.snapshot() }().tiffRepresentation,
+                if let tiff = { SkyScene.applyLensShift(to: sky.cameraNode, viewport: scnView.bounds.size); sky.earth.renderFrame(camera: sky.cameraNode); return scnView.snapshot() }().tiffRepresentation,
                    let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                     try? png.write(to: dir.appendingPathComponent("sky-alignment-mode.png"))
                 }
