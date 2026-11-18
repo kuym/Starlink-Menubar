@@ -82,6 +82,7 @@ struct SkyHUD: View {
                     .help("Signal: \(Assessment.bars(status)) of 4 bars")
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
+                    LocationButton(location: location)
                     Link(destination: URL(string: "http://192.168.100.1")!) {
                         HStack(spacing: 4) {
                             Image(systemName: "link").foregroundStyle(Self.accent)
@@ -90,7 +91,6 @@ struct SkyHUD: View {
                         .font(.system(size: Self.textSize))
                     }
                     .help("Open the dish's web UI (192.168.100.1)")
-                    LocationButton(location: location)
                 }
             }
             Spacer(minLength: 0)
