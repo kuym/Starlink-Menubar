@@ -1,17 +1,16 @@
 import AppKit
 
-/// Renders the menu bar image. Normal signal uses the system "cellularbars" symbol with a
-/// variable value (so it looks exactly like the phone-style indicator and follows the menu bar's
-/// light/dark appearance as a template). Error states swap in a coloured symbol.
+/// Renders the menu bar image. Signal strength (and no signal) is the app's own symbol: a Starlink dish on
+/// its kickstand with the bars on its face, drawn from `Design/signal-icon.svg` (via `SignalIconShapes`) as a
+/// vector template image, so it's sharp at any scale and follows the menu bar's appearance. Error states swap
+/// in a coloured system symbol.
 enum StatusIcon {
     static func image(for state: IconState) -> NSImage {
         switch state {
         case .bars(let n):
-            return symbol("cellularbars", variable: Double(n) / 4.0, template: true, label: "\(n) of 4 bars")
-        case .searching:
-            return composite(base: symbol("cellularbars", variable: 0, template: false, color: .secondaryLabelColor),
-                             badge: symbol("xmark", pointSize: 7, weight: .black, color: .systemRed),
-                             label: "Starlink offline")
+            return signal(bars: n, label: "Starlink: \(n) of 4 bars")
+        case .searching:                         // the dish is there, but no service or connection yet
+            return signal(bars: 0, label: "Starlink: no service")
         case .obstructed:
             return symbol("tree.fill", color: .systemOrange, label: "Starlink obstructed")
         case .misaligned:
@@ -22,9 +21,46 @@ enum StatusIcon {
             return key.hasPrefix("thermal")
                 ? symbol("thermometer.high", color: .systemRed, label: "Starlink thermal shutdown")
                 : symbol("exclamationmark.triangle.fill", color: .systemRed, label: "Starlink hardware fault")
-        case .notOnStarlink:
-            return symbol("antenna.radiowaves.left.and.right.slash", template: true, label: "Not on Starlink")
+        case .notOnStarlink:                     // no dish found
+            return signal(bars: nil, label: "No Starlink dish found")
         }
+    }
+
+    /// The dish symbol with `bars` of 4 bars lit (0: dish there, no service), or (nil) struck through: no dish.
+    static func signal(bars: Int?, label: String) -> NSImage {
+        let L = SignalIconShapes.layers
+        let img = NSImage(size: SignalIconShapes.size, flipped: true) { _ in
+            guard let cg = NSGraphicsContext.current?.cgContext else { return false }
+            func fill(_ id: String) {
+                guard let layer = L[id] else { return }
+                // A partly transparent layer is drawn whole, then faded, so its overlapping shapes don't darken.
+                let faded = layer.opacity < 1
+                if faded { cg.setAlpha(layer.opacity); cg.beginTransparencyLayer(auxiliaryInfo: nil) }
+                for shape in layer.shapes {
+                    let p = CGMutablePath()
+                    for ring in shape.outlines { p.addLines(between: ring); p.closeSubpath() }
+                    cg.addPath(p)
+                    cg.fillPath(using: shape.evenOdd ? .evenOdd : .winding)
+                }
+                if faded { cg.endTransparencyLayer(); cg.setAlpha(1) }
+            }
+            cg.setFillColor(.black)
+            fill("frame")
+            fill("stand")
+            if let bars {
+                for i in 0..<max(0, min(4, bars)) { fill("bar-\(i + 1)") }
+            } else {
+                fill("none-edge")
+                cg.setBlendMode(.clear)          // the gap round the slash
+                fill("none-cut")
+                cg.setBlendMode(.normal)
+                fill("none-slash")
+            }
+            return true
+        }
+        img.isTemplate = true
+        img.accessibilityDescription = label
+        return img
     }
 
     private static func symbol(_ name: String, variable: Double? = nil, pointSize: CGFloat = 14,
@@ -37,18 +73,6 @@ enum StatusIcon {
         if let color, !template { config = config.applying(.init(paletteColors: [color])) }
         let img = base.withSymbolConfiguration(config) ?? base
         img.isTemplate = template
-        return img
-    }
-
-    private static func composite(base: NSImage, badge: NSImage, label: String) -> NSImage {
-        let size = base.size
-        let img = NSImage(size: size, flipped: false) { rect in
-            base.draw(in: rect)
-            let b = badge.size
-            badge.draw(in: NSRect(x: 0, y: 0, width: b.width, height: b.height))
-            return true
-        }
-        img.accessibilityDescription = label
         return img
     }
 }

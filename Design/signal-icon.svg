@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 16" width="352" height="256">
+  <!--
+    Starlink Menu Bar: signal-strength icon master (menu bar status item), 22 x 16 pt.
+    A Starlink dish in perspective on its kickstand; the signal bars are drawn on the panel, and the
+    fourth bar is also the panel's right edge. Straight-edged polygons only, filled solid; horizontal
+    edges on whole or half points so they're crisp on Retina (and mostly on 1x) screens. The panel reads as
+    a slab: its corners are mitred along its thickness, (-0.75, 2) per 2 pt (the front face's right end, the
+    top-left corner and the far edge's right end).
+
+    The panel and stand (frame, stand, none-edge) are at 50% opacity: lighter, finer lines, like the outline
+    of the system battery icon; the bars and the slash are solid. Group opacity applies to each group as a
+    whole, so where a group's shapes overlap they don't darken.
+
+    Layers (the app combines them per state):
+      frame, stand        every state (the stand is one even-odd path: an outline with a hole)
+      bar-1 ... bar-4     the bars: state n shows bar-1 ... bar-n
+      none-edge           "no signal" only: the panel's outline closed
+      none-cut            "no signal" only: erased from everything drawn before it, leaving a gap round
+                          the slash
+      none-slash          "no signal" only
+    Edit this file, then run Design/svg-to-swift.py to regenerate Sources/StarlinkMenuBar/SignalIconShapes.swift.
+    As shown here (preview): the full-signal state.
+  -->
+  <g id="frame" opacity="0.50">
+    <polygon points="2.5,1 11.5,1 11.125,2 3.15,2"/>
+    <polygon points="2.5,1 10.95,14 8.95,14 1.768,2.951"/>
+    <polygon points="7.65,12 21.5,12 20.75,14 8.95,14"/>
+  </g>
+  <g id="stand" opacity="0.55">
+    <path fill-rule="evenodd" d="M4.242,6.758 L0.5,10.5 L6.675,10.5 Z M4.8,7.615 L2.914,9.5 L6.025,9.5 Z"/>
+  </g>
+  <g id="bar-1">
+    <polygon points="10.5,11 12,11 10.375,8.5 8.875,8.5"/>
+  </g>
+  <g id="bar-2">
+    <polygon points="13.5,11 15,11 12.4,7 10.9,7"/>
+  </g>
+  <g id="bar-3">
+    <polygon points="16.5,11 18,11 13.775,4.5 12.275,4.5"/>
+  </g>
+  <g id="bar-4">
+    <polygon points="19.5,11 21,11 14.5,1 13,1"/>
+  </g>
+  <g id="none-edge" opacity="0.55" display="none">
+    <polygon points="11.5,1 14.5,1 14.5,2 11.125,2"/>
+    <polygon points="14.5,1 21.65,12 20.65,12 13.5,1"/>
+  </g>
+  <g id="none-cut" display="none">
+    <polygon points="14.3,-1 18.3,-1 4.8,17 0.8,17"/>
+  </g>
+  <g id="none-slash" display="none">
+    <polygon points="14.55,0 16.55,0 4.55,16 2.55,16"/>
+  </g>
+</svg>
