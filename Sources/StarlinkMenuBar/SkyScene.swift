@@ -10,6 +10,8 @@ import simd
 /// World frame: +x = east, +y = up, +z = south (so −z is north). Hemisphere radius = 1.
 @MainActor
 final class SkyScene {
+    /// Zooms to the Earth view or back, as a double-click on the view does (set by the view while it exists).
+    var toggleZoom: (() -> Void)?
     let scene = SCNScene()
     let cameraNode = SCNNode()
     /// The orbit's centre of rotation: halfway up from the ground to the top of the (unit) dome.
@@ -648,6 +650,7 @@ struct SkySceneView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> OrbitingSCNView {
         let v = OrbitingSCNView(frame: .zero, target: sky.cameraTarget, orbit: sky.autoOrbit, earth: sky.earth)
+        sky.toggleZoom = { [weak v] in v?.toggleZoom() }       // for the HUD's satellite and signal meter
         v.scene = sky.scene
         v.pointOfView = sky.cameraNode
         v.backgroundColor = SkyScene.background
@@ -745,7 +748,7 @@ final class OrbitingSCNView: SCNView {
     }
 
     /// Double-click: zoom out to the Earth view, or back in.
-    private func toggleZoom() {
+    func toggleZoom() {
         earth.toggle()
         updateElevationLimit()
         rendersContinuously = true

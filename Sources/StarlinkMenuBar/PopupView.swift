@@ -30,7 +30,7 @@ struct PopupView: View {
                     } else {
                         Color(nsColor: SkyScene.background)
                     }
-                    SkyHUD(status: s, history: monitor.history, location: location)
+                    SkyHUD(status: s, history: monitor.history, location: location, onToggleZoom: { sky.toggleZoom?() })
                 }
                 .frame(width: Self.width, height: Self.skyHeight)
             } else {
@@ -64,22 +64,33 @@ struct PopupView: View {
 
 // MARK: - HUD
 
-/// Everything drawn over the 3D view. Only the location and settings buttons take clicks; the rest lets drags through to
+/// Everything drawn over the 3D view. Only the signal meter, location and settings buttons take clicks; the rest lets drags through to
 /// the scene.
 struct SkyHUD: View {
     let status: DishStatus
     let history: [DishMonitor.Sample]
     var location = ObserverLocation.shared
+    /// The satellite and signal meter zoom to the Earth view and back, like a double-click on the view.
+    var onToggleZoom: () -> Void = {}
 
     static let textSize: CGFloat = 13
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top) {
-                Image(systemName: "cellularbars", variableValue: Double(Assessment.bars(status)) / 4)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .help("Signal: \(Assessment.bars(status)) of 4 bars")
+                Button { onToggleZoom() } label: {
+                    HStack(alignment: .center, spacing: 2) {
+                        SatelliteGlyph()
+                            .fill(Self.accent, style: FillStyle(eoFill: true))
+                            .frame(width: 23, height: 23)
+                        Image(systemName: "cellularbars", variableValue: Double(Assessment.bars(status)) / 4)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Signal: \(Assessment.bars(status)) of 4 bars. Click to zoom out to the Earth view, or back in")
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
                     LocationButton(location: location)
@@ -138,6 +149,30 @@ struct SkyHUD: View {
         case 1e6...: String(format: "%3.1fmbps", bps / 1e6)
         default: String(format: "%3.1fkbps", bps / 1e3)
         }
+    }
+}
+
+/// A satellite, for beside the signal meter (SF Symbols has none): a body with a dish antenna and a solar
+/// panel either side, each split into two cells, turned 135° clockwise. Fill it even-odd.
+struct SatelliteGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        // Drawn upright on a 24 × 24 grid, then turned about the centre and fitted to `rect`.
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: 9.5, y: 8.5, width: 5, height: 7), cornerSize: CGSize(width: 1, height: 1))
+        for side in [-1.0, 1.0] {
+            let x0 = side < 0 ? 1.0 : 16.0                      // panel's outer cells, 7 wide, a 1.5 gap from the body
+            p.addRect(CGRect(x: x0, y: 9, width: 3.2, height: 6))
+            p.addRect(CGRect(x: x0 + 3.8, y: 9, width: 3.2, height: 6))
+            p.addRect(CGRect(x: side < 0 ? 8 : 14.5, y: 11.4, width: 1.5, height: 1.2))   // strut to the body
+        }
+        p.addRect(CGRect(x: 11.4, y: 6, width: 1.2, height: 2.5))                       // antenna mast
+        p.move(to: CGPoint(x: 8.5, y: 3)); p.addQuadCurve(to: CGPoint(x: 15.5, y: 3), control: CGPoint(x: 12, y: 8.6))
+        p.closeSubpath()                                                                   // the dish
+        let fit = min(rect.width, rect.height) / 24
+        return p.applying(CGAffineTransform(translationX: -12, y: -12)
+            .concatenating(CGAffineTransform(rotationAngle: 3 * .pi / 4))     // clockwise (y down)
+            .concatenating(CGAffineTransform(scaleX: fit, y: fit))
+            .concatenating(CGAffineTransform(translationX: rect.midX, y: rect.midY)))
     }
 }
 

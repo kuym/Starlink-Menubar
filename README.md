@@ -20,7 +20,7 @@ public satellite orbit data from CelesTrak. It needs no account and has no third
 
 * **Menu bar icon**: a Starlink dish on its kickstand with 0–4 signal bars on its face: empty when the dish is there but has no service or connection, and struck through when no Starlink dish is found. It's drawn as a vector template image from the master `Design/signal-icon.svg` (run `Design/svg-to-swift.py` after editing it to regenerate `SignalIconShapes.swift`). It is replaced by an orange tree when the dish is **obstructed**, a yellow crosshair when it is **misaligned**, and red icons for thermal or hardware faults and disabled service.
 * **Popup**: the whole window is the 3D sky view (below), with a heads-up display over it:
-  * Top left: signal bars. Top right: the location used for the satellite beams (Cupertino, CA by default),
+  * Top left: a blue satellite and the signal bars; click them to zoom out to the Earth view and back, like a double-click on the view. Top right: the location used for the satellite beams (Cupertino, CA by default),
     and under it a gear for Settings. Click the location to use this Mac's position from Location
     Services; macOS asks for permission the first time. Settings has **Open at login** (registered with
     `SMAppService`, so it shows in System Settings › General › Login Items; it only works from the app
