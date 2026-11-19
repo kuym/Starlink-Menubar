@@ -42,6 +42,9 @@ final class DishMonitor {
         var obstructionMap: ObstructionMap?
     }
 
+    /// Whether a dish is answering right now (unobserved, so current even while the popup is closed).
+    var hasDish: Bool { live.status != nil }
+
     var isPopupOpen = false {
         didSet {
             guard isPopupOpen != oldValue else { return }

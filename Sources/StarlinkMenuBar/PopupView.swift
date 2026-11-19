@@ -48,7 +48,7 @@ struct PopupView: View {
         .background(WindowSizer(contentSize: contentSize) { r in if r != cornerRadius { cornerRadius = r } })
         // MenuBarExtra keeps this view alive while the popup is closed, and onAppear/onDisappear don't
         // reliably track it, so watch the hosting window's visibility instead.
-        .background(WindowVisibilityReader { monitor.isPopupOpen = $0 })
+        .background(WindowVisibilityReader(waitsForScene: { [monitor] in monitor.hasDish }) { monitor.isPopupOpen = $0 })
         .background {
             Button("Quit") { NSApplication.shared.terminate(nil) }   // ⌘Q; also in the right-click menu
                 .keyboardShortcut("q")
@@ -404,18 +404,34 @@ private struct WindowSizer: NSViewRepresentable {
 
 /// Reports whether the hosting window is actually on screen (ordered in and not fully occluded).
 private struct WindowVisibilityReader: NSViewRepresentable {
+    /// Whether the popup will show the 3D view (there's a dish), so it should wait for its first frame before
+    /// fading in. Asked as the window appears: the popup's published state only catches up after that.
+    let waitsForScene: () -> Bool
     let onChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> VisibilityView {
         let v = VisibilityView()
         v.onChange = onChange
+        v.waitsForScene = waitsForScene
         return v
     }
 
-    func updateNSView(_ v: VisibilityView, context: Context) { v.onChange = onChange }
+    func updateNSView(_ v: VisibilityView, context: Context) {
+        v.onChange = onChange
+        v.waitsForScene = waitsForScene
+    }
 
     final class VisibilityView: NSView {
         var onChange: ((Bool) -> Void)?
+        var waitsForScene: () -> Bool = { false }
+        static let fadeInSeconds: TimeInterval = 0.05
+        /// Fade in anyway if the scene hasn't drawn by then (the very first frame after launch takes ~0.3 s,
+        /// while SceneKit sets up; later ones ~50 ms).
+        static let firstFrameTimeout: TimeInterval = 1.0
+        /// After hiding, the system's fade-out (~0.15 s) runs on the window; only then is it made transparent.
+        static let clearAfterHiding: TimeInterval = 0.3
+        private var pendingFadeIn: DispatchWorkItem?
+        private var pendingClear: DispatchWorkItem?
         // Removed when the view leaves its window (viewDidMoveToWindow with nil); closures hold self weakly.
         private var observers: [NSObjectProtocol] = []
         private var visibleKVO: NSKeyValueObservation?
@@ -427,6 +443,11 @@ private struct WindowVisibilityReader: NSViewRepresentable {
             observers = []
             visibleKVO = nil
             if let w = window {
+                w.animationBehavior = .none          // the first opening is instant too (see `report`)
+                if !w.isVisible { w.alphaValue = 0 }   // and starts transparent
+                observers.append(NotificationCenter.default.addObserver(forName: .skySceneDidRenderFirstFrame, object: w, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.fadeIn() }
+                })
                 visibleKVO = w.observe(\.isVisible) { [weak self] _, _ in
                     DispatchQueue.main.async { self?.report() }
                 }
@@ -444,8 +465,39 @@ private struct WindowVisibilityReader: NSViewRepresentable {
             let visible = window.map { $0.isVisible && $0.occlusionState.contains(.visible) } ?? false
             guard visible != last else { return }
             last = visible
+            // Like the system's own menu bar menus (battery, Wi-Fi…): appear at once, fade out when dismissed.
+            // The window is reused, so set how it should animate next: instant ordering in while hidden, the
+            // standard fade for ordering out while shown.
+            window?.animationBehavior = visible ? .utilityWindow : .none
+            // Opening: the window is ordered in fully transparent; it fades in over 50 ms once the scene has
+            // rendered a whole frame, so the half-built first frames (background, then the scene) never show.
+            if let w = window {
+                pendingClear?.cancel(); pendingClear = nil
+                pendingFadeIn?.cancel(); pendingFadeIn = nil
+                if visible {
+                    if w.alphaValue < 1 {
+                        let fallback = DispatchWorkItem { [weak self] in self?.fadeIn() }
+                        pendingFadeIn = fallback
+                        DispatchQueue.main.asyncAfter(deadline: .now() + (waitsForScene() ? Self.firstFrameTimeout : 0), execute: fallback)
+                    }
+                } else {
+                    let clear = DispatchWorkItem { [weak w] in if let w, !w.isVisible { w.alphaValue = 0 } }
+                    pendingClear = clear
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.clearAfterHiding, execute: clear)
+                }
+            }
             // Defer: this can fire during a SwiftUI update pass.
             DispatchQueue.main.async { [onChange] in onChange?(visible) }
+        }
+
+        private func fadeIn() {
+            pendingFadeIn?.cancel(); pendingFadeIn = nil
+            guard let w = window, w.isVisible, w.alphaValue < 1 else { return }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Self.fadeInSeconds
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                w.animator().alphaValue = 1
+            }
         }
     }
 }

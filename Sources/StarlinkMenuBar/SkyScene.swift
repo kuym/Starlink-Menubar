@@ -706,7 +706,13 @@ struct SkySceneView: NSViewRepresentable {
 /// camera coast (see `AutoOrbit`) until it's practically stopped. In alignment mode (`focusAzimuthDeg`
 /// set) it glides to face the ideal orientation and parks there instead of orbiting. Renders
 /// continuously only while moving.
+extension Notification.Name {
+    /// Posted (object: the window) when a newly shown sky view has rendered its first frame.
+    static let skySceneDidRenderFirstFrame = Notification.Name("SkySceneDidRenderFirstFrame")
+}
+
 final class OrbitingSCNView: SCNView {
+    private var announcedFirstFrame = false
     /// Where to park the camera instead of orbiting (nil = orbit). Takes effect immediately if the camera
     /// is running on its own; after a gesture it applies once the camera comes to rest.
     var focusAzimuthDeg: Float? {
@@ -783,6 +789,17 @@ final class OrbitingSCNView: SCNView {
         self.target = target
         super.init(frame: frame, options: nil)
         delegate = orbit
+        // The popup is held transparent until the scene has drawn once (see `WindowVisibilityReader`). The view
+        // exists only while the popup is open, so its first frame is the first of each opening.
+        orbit.onRendered = { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, !self.announcedFirstFrame, let w = self.window else { return }
+                    self.announcedFirstFrame = true
+                    NotificationCenter.default.post(name: .skySceneDidRenderFirstFrame, object: w)
+                }
+            }
+        }
         orbit.onParked = { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -1020,6 +1037,8 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     private var elVel: Float = 0
     /// Called (on the render thread) when `.focus` has parked the camera and gone idle.
     var onParked: (@Sendable () -> Void)?
+    /// Called (on the render thread) after each frame has been rendered.
+    var onRendered: (@Sendable () -> Void)?
 
     /// The zoom, the beams and the Earth view: animated every frame after the camera moves (beams face it).
     private let earth: EarthView?
@@ -1060,6 +1079,10 @@ final class AutoOrbit: NSObject, SCNSceneRendererDelegate, @unchecked Sendable {
     static func smootherstep(_ x: Float) -> Float {
         let t = max(0, min(1, x))
         return t * t * t * (t * (t * 6 - 15) + 10)
+    }
+
+    func renderer(_ renderer: any SCNSceneRenderer, didRenderScene scene: SCNScene, atTime time: TimeInterval) {
+        onRendered?()
     }
 
     func renderer(_ renderer: any SCNSceneRenderer, updateAtTime time: TimeInterval) {
