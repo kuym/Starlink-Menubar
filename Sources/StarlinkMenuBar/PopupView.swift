@@ -64,7 +64,7 @@ struct PopupView: View {
 
 // MARK: - HUD
 
-/// Everything drawn over the 3D view. Only the web link takes clicks; the rest lets drags through to
+/// Everything drawn over the 3D view. Only the location and settings buttons take clicks; the rest lets drags through to
 /// the scene.
 struct SkyHUD: View {
     let status: DishStatus
@@ -83,14 +83,14 @@ struct SkyHUD: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
                     LocationButton(location: location)
-                    Link(destination: URL(string: "http://192.168.100.1")!) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "link").foregroundStyle(Self.accent)
-                            Text("Web").foregroundStyle(.white)
-                        }
-                        .font(.system(size: Self.textSize))
+                    Button { SettingsWindow.show() } label: {
+                        Image(systemName: "gearshape")
+                            .foregroundStyle(Self.accent)
+                            .font(.system(size: 15))
+                            .contentShape(Rectangle())
                     }
-                    .help("Open the dish's web UI (192.168.100.1)")
+                    .buttonStyle(.plain)
+                    .help("Settings: open at login, the dish's web UI, quit")
                 }
             }
             Spacer(minLength: 0)

@@ -913,7 +913,7 @@ final class OrbitingSCNView: SCNView {
 
     @objc private func refreshNow() { onRefresh() }
     @objc private func zoomFromMenu() { toggleZoom() }
-    @objc private func openWebUI() { NSWorkspace.shared.open(URL(string: "http://192.168.100.1")!) }
+    @objc private func openWebUI() { NSWorkspace.shared.open(dishWebUI) }
 
     // A local event monitor sees gestures regardless of how SceneKit's camera control consumes them.
     override func viewDidMoveToWindow() {

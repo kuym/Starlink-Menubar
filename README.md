@@ -22,9 +22,11 @@ public satellite orbit data from CelesTrak. It needs no account and has no third
 
 * **Menu bar icon**: a phone-style 4-bar signal indicator. It is replaced by an orange tree when the dish is **obstructed**, a yellow crosshair when it is **misaligned**, and red icons for thermal or hardware faults and disabled service. A crossed-out antenna means no Starlink dish was found.
 * **Popup**: the whole window is the 3D sky view (below), with a heads-up display over it:
-  * Top left: signal bars. Top right: a link to the dish's web UI, and under it the location used for the
-    satellite beams (Cupertino, CA by default). Click the location to use this Mac's position from Location
-    Services; macOS asks for permission the first time.
+  * Top left: signal bars. Top right: the location used for the satellite beams (Cupertino, CA by default),
+    and under it a gear for Settings. Click the location to use this Mac's position from Location
+    Services; macOS asks for permission the first time. Settings has **Open at login** (registered with
+    `SMAppService`, so it shows in System Settings › General › Login Items; it only works from the app
+    bundle), **Open Starlink Web UI** (http://192.168.100.1) and **Quit**.
   * Bottom: a latency graph over the last few minutes. Orange bands mark packet loss above 1% and red bands
     above 10%. The line breaks where the link was down.
   * Under the graph: current latency, max and median (`23ms  MAX 80  AVG 42`, `-ms` while down), and on the
